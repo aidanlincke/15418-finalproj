@@ -1,5 +1,3 @@
-# 15418-finalproj
-
 ### Title
 Parallelized Path Planning Algorithms, by Aidan Lincke (alincke) and Soren Dupont (sdupont)
 
