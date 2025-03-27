@@ -46,3 +46,6 @@ Because graph search algorithms are generally not highly parallel, and graphs th
 | 4/9 - 4/16  | Finalize getting the best speedup possible for the first algorithm and record results. Begin implementing two more (PRMs and RRT).
 | 4/16 - 4/23 | Finalize these two algorithms and record results.
 | 4/23 - end  | Depends on where we stand at this point. There are a few niche things related to this topic that we are interested in exploring that we may have or may have not already looked at at this point (for example seeing if CUDA can be used, utilizing and parallelizing helper-procedures such as graph contraction, and whatever else may come up!); compare our results with theoretical speedup for these algorithms. Finalize results and poster board.
+
+### PDF
+[Proposal PDF](proposal.pdf)
