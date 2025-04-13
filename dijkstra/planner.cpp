@@ -7,7 +7,7 @@
 #include <unordered_set>
 #include <optional>
 
-using Map = std::vector<std::vector<int>>;
+using Map = std::vector<std::vector<float>>;
 struct Position {
     int row;
     int col;
@@ -18,12 +18,18 @@ struct Position {
     bool operator==(const Position& other) const {
         return row == other.row && col == other.col;
     }
+    bool operator !=(const Position& other) const {
+        return !(*this == other);
+    }
     bool valid(const Map& map) {
         int rows = map.size();
         int cols = map[0].size();
         return 0 <= row && row < rows && 0 <= col && col < cols;
     }
 };
+std::ostream& operator<<(std::ostream& os, const Position& pos) {
+    return os << "(" << pos.row << ", " << pos.col << ")";
+}
 struct PositionHash {
     std::size_t operator()(const Position& position) const {
         return std::hash<int>()(position.row) ^ (std::hash<int>()(position.col) << 1);
@@ -31,18 +37,21 @@ struct PositionHash {
 };
 struct DijkstraNode {
     Position position;
-    int cost;
-    std::vector<Position> history;
+    float cost;
     
     bool operator>(const DijkstraNode& other) const {
         return cost > other.cost;
     }
 };
-struct DijkstraResult {
-    int totalCost;
+struct PlanningProblem {
+    Map map;
+    Position start;
+    Position end;
+};
+struct PlanningResult {
+    float totalCost;
     std::vector<Position> positions;
 };
-
 constexpr std::array<Position, 9> movements = {
     Position{0, 0},
     Position{1, 0},
@@ -55,82 +64,106 @@ constexpr std::array<Position, 9> movements = {
     Position{-1, 1}
 };
 
+std::optional<PlanningResult> dijkstras(const PlanningProblem& problem) {
+    Map map = problem.map;
+    Position start = problem.start;
+    Position end = problem.end;
 
-Map readGridFromFile(const std::string& filename) {
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open the map file.");
-    }
-
-    int rows, cols;
-    char comma;
-    file >> rows >> comma >> cols;
-    if (file.fail() || comma != ',') {
-        throw std::runtime_error("Invalid format for grid dimensions.");
-    }
-
-    file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-
-    Map grid(rows, std::vector<int>(cols));
-    std::string line;
-    for (int row = 0; row < rows; row++) {
-        if (!std::getline(file, line)) {
-            throw std::runtime_error("Unexpected end of file while reading grid data.");
-        }
-
-        std::stringstream ss(line);
-        for (int col = 0; col < cols; col++) {
-            int value;
-            ss >> value;
-            if (ss.fail()) {
-                throw std::runtime_error("Invalid data at row " + std::to_string(row) + ", col " + std::to_string(col) + ".");
-            }
-            grid[row][col] = value;
-
-            if (col < cols - 1) ss.ignore();
-        }
-    }
-
-    return grid;
-}
-
-std::optional<DijkstraResult> dijkstras(const Map& map, Position start, Position end) {
-    std::unordered_set<Position, PositionHash> closed;
     std::priority_queue<DijkstraNode, std::vector<DijkstraNode>, std::greater<DijkstraNode>> open;
+    std::unordered_set<Position, PositionHash> closed;
+    std::unordered_map<Position, Position, PositionHash> prev;
+    std::unordered_map<Position, float, PositionHash> dist;
 
-    open.push({start, 0, {start}});
-    while (open.size() > 0 && closed.find(end) == closed.end()) {
+    open.push({start, 0});
+    while (open.size() > 0) {
         DijkstraNode node = open.top();
         open.pop();
-        if (closed.find(node.position) != closed.end()) { 
+
+        if (closed.find(node.position) != closed.end()) {
             continue; 
         }
         closed.insert(node.position);
 
         if (node.position == end) {
-            return DijkstraResult{node.cost, node.history};
+            std::vector<Position> path;
+            for (Position at = end; at != start; at = prev[at]) {
+                path.push_back(at);
+            }
+            path.push_back(start);
+            std::reverse(path.begin(), path.end());
+            return PlanningResult{node.cost, path};
         }
 
         for (const Position& move : movements) {
             Position newPos = node.position + move;
-            if (!newPos.valid(map) || closed.find(newPos) != closed.end()) { continue; }
+            if (!newPos.valid(map) || closed.find(newPos) != closed.end()) { 
+                continue; 
+            }
 
-            DijkstraNode newNode = DijkstraNode{newPos, node.cost + map[newPos.row][newPos.col], node.history};
-            newNode.history.push_back(newPos);
-            open.push(newNode);
+            float newCost = node.cost + map[newPos.row][newPos.col] + 1;
+            if (dist.find(newPos) == dist.end() || newCost < dist[newPos]) {
+                dist[newPos] = newCost;
+                prev[newPos] = node.position;
+                open.push({newPos, newCost});
+            }
         }
     }
     return std::nullopt;
 }
 
-int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <map_file>" << std::endl;
-        return -1;
+PlanningProblem loadProblem(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw std::runtime_error("Failed to open " + path);
+
+    int32_t rows, cols;
+    int32_t start_row, start_col, goal_row, goal_col;
+
+    in.read(reinterpret_cast<char*>(&rows), sizeof(int32_t));
+    in.read(reinterpret_cast<char*>(&cols), sizeof(int32_t));
+    in.read(reinterpret_cast<char*>(&start_row), sizeof(int32_t));
+    in.read(reinterpret_cast<char*>(&start_col), sizeof(int32_t));
+    in.read(reinterpret_cast<char*>(&goal_row), sizeof(int32_t));
+    in.read(reinterpret_cast<char*>(&goal_col), sizeof(int32_t));
+
+    std::vector<float> flat(rows * cols);
+    in.read(reinterpret_cast<char*>(flat.data()), flat.size() * sizeof(float));
+    in.close();
+
+    Map grid(rows, std::vector<float>(cols));
+    for (int i = 0; i < rows; ++i) {
+        std::copy(flat.begin() + i * cols, flat.begin() + (i + 1) * cols, grid[i].begin());
     }
 
-    Map map = readGridFromFile(argv[1]);
-    dijkstras(map, {0, 0}, {100, 100});
+    return PlanningProblem{
+        .map = std::move(grid),
+        .start = {start_row, start_col},
+        .end = {goal_row, goal_col}
+    };
+}
 
+void writePlan(const std::string& filename, const std::vector<Position>& plan) {
+    std::ofstream out(filename, std::ios::binary);
+    if (!out) throw std::runtime_error("Failed to open output file: " + filename);
+
+    int32_t length = plan.size();
+    out.write(reinterpret_cast<char*>(&length), sizeof(int32_t));
+
+    for (const auto& pos : plan) {
+        out.write(reinterpret_cast<const char*>(&pos.row), sizeof(int32_t));
+        out.write(reinterpret_cast<const char*>(&pos.col), sizeof(int32_t));
+    }
+
+    out.close();
+}
+
+int main(int argc, char *argv[]) {
+    PlanningProblem problem = loadProblem("problems/dc.bin");
+
+    std::optional<PlanningResult> result = dijkstras(problem);
+    if (result.has_value()) {
+        writePlan("plans/dc.bin", result.value().positions);
+    } else {
+        std::cout << "No path found." << std::endl;
+    }
     return 0;
 }
