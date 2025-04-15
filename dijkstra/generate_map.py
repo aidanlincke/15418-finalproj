@@ -30,7 +30,7 @@ if __name__ == "__main__":
     cropped -= np.min(cropped) # Normalize to >=0
 
     original_rows, original_cols = cropped.shape
-    target_rows = 3000
+    target_rows = 2500
     target_cols = int(original_cols * (target_rows / original_rows))
 
     resized = resize(
