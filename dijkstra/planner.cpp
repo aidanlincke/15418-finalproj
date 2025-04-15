@@ -6,6 +6,10 @@
 #include <limits>
 #include <unordered_set>
 #include <optional>
+#include <queue>
+#include <unordered_map>
+#include <algorithm>
+#include <chrono>
 
 using Map = std::vector<std::vector<float>>;
 struct Position {
@@ -159,9 +163,14 @@ void writePlan(const std::string& filename, const std::vector<Position>& plan) {
 int main(int argc, char *argv[]) {
     PlanningProblem problem = loadProblem("problems/dc.bin");
 
+    auto start = std::chrono::high_resolution_clock::now();
     std::optional<PlanningResult> result = dijkstras(problem);
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = end - start;
+
     if (result.has_value()) {
         writePlan("plans/dc.bin", result.value().positions);
+        std::cout << "Found a path with " << result.value().totalCost << " total cost in " << diff.count() << " seconds." << std::endl;
     } else {
         std::cout << "No path found." << std::endl;
     }
