@@ -31,8 +31,8 @@ During our poster session, we’ll do a live demo that shows our planning algori
 We don’t have preliminary results to show because we’ve mostly completed the sequential versions and the tooling required for our problem. We’re currently working through parallelization, including parallelizing the edge contractions and parallelizing Dijkstra’s algorithm through delta stepping.
 
 ### Issues of Concern
-In terms of parallelizing Dijkstra’s algorithm, there are a few different approaches. We’ve decided to move forward with a delta-stepping approach, but there could potentially be better options that offer a better speedup.
-We are hoping that implementing contraction hierarchies for improving Dijkstra’s algorithm will not be too much more difficult than the graph contraction techniques that we have already done; it seems that this graph contraction technique is significantly more involved.
+- In terms of parallelizing Dijkstra’s algorithm, there are a few different approaches. We’ve decided to move forward with a delta-stepping approach, but there could potentially be better options that offer a better speedup.
+- We are hoping that implementing contraction hierarchies for improving Dijkstra’s algorithm will not be too much more difficult than the graph contraction techniques that we have already done; it seems that this graph contraction technique is significantly more involved.
 
 ### PDF
 [Milestone Report PDF](milestone_report.pdf)
