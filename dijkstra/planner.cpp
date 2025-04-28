@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <omp.h>
 
 using Map = std::vector<std::vector<float>>;
 struct Position {
@@ -115,6 +117,12 @@ std::optional<PlanningResult> sequentialDijkstras(const PlanningProblem& problem
     return std::nullopt;
 }
 
+struct Update {
+    float newCost;
+    Position position;
+    int i;
+};
+
 std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& problem, float delta) {
     Map map = problem.map;
     Position start = problem.start;
@@ -125,40 +133,76 @@ std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& prob
         return static_cast<int>(std::floor(dist / delta));
     };
 
-    std::vector<std::unordered_set<Position, PositionHash>> buckets(numBuckets);
+    std::vector<std::vector<Position>> buckets(numBuckets);
     std::unordered_map<Position, Position, PositionHash> prev;
     std::unordered_map<Position, float, PositionHash> dist;
 
-    buckets[0].insert(start);
+    buckets[0].push_back(start);
     dist[start] = 0;
     for (int bucketI = 0; bucketI < numBuckets; bucketI++) {
 
         std::unordered_set<Position, PositionHash> S;
-        std::unordered_set<Position, PositionHash> R = buckets[bucketI];
-        std::unordered_set<Position, PositionHash> nextR;
+        std::vector<Position> R = buckets[bucketI];
+        std::vector<Position> nextR;
 
         while (R.size() > 0) {
-            for (const Position& position : R) {
-                S.insert(position);
 
-                float currCost = dist[position];
-                for (const Position& movement : movements) {
-                    Position newPosition = position + movement;
-                    if (!newPosition.valid(map)) continue;
-    
-                    float weight = map[newPosition.row][newPosition.col] + 1;
-                    if (weight > delta) continue;
-    
-                    float newCost = currCost + weight;
+            std::vector<std::unordered_set<Position, PositionHash>> allLocalS(omp_get_max_threads());
+            std::vector<std::vector<Position>> allLocalNextR(omp_get_max_threads());
+            std::vector<std::unordered_map<Position, Update, PositionHash>> allLocalUpdates(omp_get_max_threads());
+
+            #pragma omp parallel
+            {
+                int tid = omp_get_thread_num();
+                auto& localS = allLocalS[tid];
+                auto& localNextR = allLocalNextR[tid];
+                auto& localUpdates = allLocalUpdates[tid];
+
+                #pragma omp for
+                for (int i = 0; i < R.size(); i++) {
+                    Position position = R[i];
+                    localS.insert(position);
+
+                    float currCost = dist[position];
+                    for (const Position& movement : movements) {
+                        Position newPosition = position + movement;
+                        if (!newPosition.valid(map)) continue;
+        
+                        float weight = map[newPosition.row][newPosition.col] + 1;
+                        if (weight > delta) continue;
+        
+                        float newCost = currCost + weight;
+
+                        if ((dist.count(newPosition) == 0 || newCost < dist[newPosition]) && (localUpdates.count(newPosition) == 0 || newCost < localUpdates[newPosition].newCost)) {
+                            localUpdates[newPosition] = {newCost, position, bucketIndex(newCost)};
+                        }
+                    }
+                }
+            }
+
+            
+
+            for (auto& localS : allLocalS) {
+                for (const auto& p : localS) {
+                    S.insert(p);
+                }
+            }
+            for (auto& localNextR : allLocalNextR) {
+                nextR.insert(nextR.end(), localNextR.begin(), localNextR.end());
+            }
+
+            for (auto& localUpdates : allLocalUpdates) {
+                for (auto& [newPosition, localUpdate] : localUpdates) {
+                    float newCost = localUpdate.newCost;
+                    Position position = localUpdate.position;
+            
                     if (dist.count(newPosition) == 0 || newCost < dist[newPosition]) {
                         dist[newPosition] = newCost;
                         prev[newPosition] = position;
-    
-                        int nextBucketI = bucketIndex(newCost);
-                        if (nextBucketI == bucketI) {
-                            nextR.insert(newPosition);
+                        if (localUpdate.i == bucketI) {
+                            nextR.push_back(newPosition);
                         } else {
-                            buckets[nextBucketI].insert(newPosition);
+                            buckets[localUpdate.i].push_back(newPosition);
                         }
                     }
                 }
@@ -181,7 +225,7 @@ std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& prob
                 if (dist.count(newPosition) == 0 || newCost < dist[newPosition]) {
                     dist[newPosition] = newCost;
                     prev[newPosition] = position;
-                    buckets[bucketIndex(newCost)].insert(newPosition);
+                    buckets[bucketIndex(newCost)].push_back(newPosition);
                 }
             }
         }
@@ -242,11 +286,12 @@ void writePlan(const std::string& filename, const std::vector<Position>& plan) {
 }
 
 int main(int argc, char *argv[]) {
+    omp_set_num_threads(8);
     PlanningProblem problem = loadProblem("problems/dc.bin");
 
     auto start = std::chrono::high_resolution_clock::now();
-    std::optional<PlanningResult> result = sequentialDijkstras(problem);
-    // std::optional<PlanningResult> result = deltaSteppingDijkstras(problem, 5.0f);
+    // std::optional<PlanningResult> result = sequentialDijkstras(problem);
+    std::optional<PlanningResult> result = deltaSteppingDijkstras(problem, 20.0f);
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end - start;
 
