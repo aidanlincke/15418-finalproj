@@ -1,3 +1,5 @@
+# Proposal
+
 ### Title
 Parallelized Path Planning Algorithms, by Aidan Lincke (alincke) and Soren Dupont (sdupont)
 
