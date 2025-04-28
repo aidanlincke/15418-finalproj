@@ -68,7 +68,7 @@ constexpr std::array<Position, 9> movements = {
     Position{-1, 1}
 };
 
-std::optional<PlanningResult> dijkstras(const PlanningProblem& problem) {
+std::optional<PlanningResult> sequentialDijkstras(const PlanningProblem& problem) {
     Map map = problem.map;
     Position start = problem.start;
     Position end = problem.end;
@@ -113,6 +113,87 @@ std::optional<PlanningResult> dijkstras(const PlanningProblem& problem) {
         }
     }
     return std::nullopt;
+}
+
+std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& problem, float delta) {
+    Map map = problem.map;
+    Position start = problem.start;
+    Position end = problem.end;
+
+    const int numBuckets = 10000;
+    auto bucketIndex = [&](float dist) -> int {
+        return static_cast<int>(std::floor(dist / delta));
+    };
+
+    std::vector<std::unordered_set<Position, PositionHash>> buckets(numBuckets);
+    std::unordered_map<Position, Position, PositionHash> prev;
+    std::unordered_map<Position, float, PositionHash> dist;
+
+    buckets[0].insert(start);
+    dist[start] = 0;
+    for (int bucketI = 0; bucketI < numBuckets; bucketI++) {
+
+        std::unordered_set<Position, PositionHash> S;
+        std::unordered_set<Position, PositionHash> R = buckets[bucketI];
+        std::unordered_set<Position, PositionHash> nextR;
+
+        while (R.size() > 0) {
+            for (const Position& position : R) {
+                S.insert(position);
+
+                float currCost = dist[position];
+                for (const Position& movement : movements) {
+                    Position newPosition = position + movement;
+                    if (!newPosition.valid(map)) continue;
+    
+                    float weight = map[newPosition.row][newPosition.col] + 1;
+                    if (weight > delta) continue;
+    
+                    float newCost = currCost + weight;
+                    if (dist.count(newPosition) == 0 || newCost < dist[newPosition]) {
+                        dist[newPosition] = newCost;
+                        prev[newPosition] = position;
+    
+                        int nextBucketI = bucketIndex(newCost);
+                        if (nextBucketI == bucketI) {
+                            nextR.insert(newPosition);
+                        } else {
+                            buckets[nextBucketI].insert(newPosition);
+                        }
+                    }
+                }
+            }
+            R = nextR;
+            nextR.clear();
+        }
+
+        for (const Position& position : S) {
+            float currCost = dist[position];
+
+            for (const Position& movement : movements) {
+                Position newPosition = position + movement;
+                if (!newPosition.valid(map)) continue;
+
+                float weight = map[newPosition.row][newPosition.col] + 1;
+                if (weight <= delta) continue;
+
+                float newCost = currCost + weight;
+                if (dist.count(newPosition) == 0 || newCost < dist[newPosition]) {
+                    dist[newPosition] = newCost;
+                    prev[newPosition] = position;
+                    buckets[bucketIndex(newCost)].insert(newPosition);
+                }
+            }
+        }
+    }
+
+    std::vector<Position> path;
+    for (Position at = end; at != start; at = prev[at]) {
+        path.push_back(at);
+    }
+    path.push_back(start);
+    std::reverse(path.begin(), path.end());
+    return PlanningResult{dist[end], path};
 }
 
 PlanningProblem loadProblem(const std::string& path) {
@@ -164,7 +245,8 @@ int main(int argc, char *argv[]) {
     PlanningProblem problem = loadProblem("problems/dc.bin");
 
     auto start = std::chrono::high_resolution_clock::now();
-    std::optional<PlanningResult> result = dijkstras(problem);
+    std::optional<PlanningResult> result = sequentialDijkstras(problem);
+    // std::optional<PlanningResult> result = deltaSteppingDijkstras(problem, 5.0f);
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end - start;
 
