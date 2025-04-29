@@ -12,6 +12,9 @@
 #include <chrono>
 #include <cmath>
 #include <omp.h>
+#include <tbb/concurrent_vector.h>
+#include <tbb/concurrent_unordered_set.h>
+#include <tbb/concurrent_unordered_map.h>
 
 using Map = std::vector<std::vector<float>>;
 struct Position {
@@ -27,7 +30,7 @@ struct Position {
     bool operator !=(const Position& other) const {
         return !(*this == other);
     }
-    bool valid(const Map& map) {
+    bool valid(const Map& map) const {
         int rows = map.size();
         int cols = map[0].size();
         return 0 <= row && row < rows && 0 <= col && col < cols;
@@ -133,76 +136,44 @@ std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& prob
         return static_cast<int>(std::floor(dist / delta));
     };
 
-    std::vector<std::vector<Position>> buckets(numBuckets);
-    std::unordered_map<Position, Position, PositionHash> prev;
-    std::unordered_map<Position, float, PositionHash> dist;
+    std::vector<tbb::concurrent_vector<Position>> buckets(numBuckets);
+    tbb::concurrent_unordered_map<Position, Position, PositionHash> prev;
+    tbb::concurrent_unordered_map<Position, float, PositionHash> dist;
 
     buckets[0].push_back(start);
     dist[start] = 0;
     for (int bucketI = 0; bucketI < numBuckets; bucketI++) {
 
-        std::unordered_set<Position, PositionHash> S;
-        std::vector<Position> R = buckets[bucketI];
-        std::vector<Position> nextR;
+        tbb::concurrent_vector<Position> S;
+        tbb::concurrent_vector<Position> R = buckets[bucketI];
+        tbb::concurrent_vector<Position> nextR;
 
         while (R.size() > 0) {
 
-            std::vector<std::unordered_set<Position, PositionHash>> allLocalS(omp_get_max_threads());
-            std::vector<std::vector<Position>> allLocalNextR(omp_get_max_threads());
-            std::vector<std::unordered_map<Position, Update, PositionHash>> allLocalUpdates(omp_get_max_threads());
+            #pragma omp parallel for
+            for (int i = 0; i < R.size(); i++) {
+                const Position& position = R[i];
+                S.push_back(position);
 
-            #pragma omp parallel
-            {
-                int tid = omp_get_thread_num();
-                auto& localS = allLocalS[tid];
-                auto& localNextR = allLocalNextR[tid];
-                auto& localUpdates = allLocalUpdates[tid];
+                float currCost = dist[position];
+                for (const Position& movement : movements) {
+                    const Position newPosition = position + movement;
+                    if (!newPosition.valid(map)) continue;
+    
+                    float weight = map[newPosition.row][newPosition.col] + 1;
+                    if (weight > delta) continue;
+    
+                    float newCost = currCost + weight;
 
-                #pragma omp for
-                for (int i = 0; i < R.size(); i++) {
-                    Position position = R[i];
-                    localS.insert(position);
-
-                    float currCost = dist[position];
-                    for (const Position& movement : movements) {
-                        Position newPosition = position + movement;
-                        if (!newPosition.valid(map)) continue;
-        
-                        float weight = map[newPosition.row][newPosition.col] + 1;
-                        if (weight > delta) continue;
-        
-                        float newCost = currCost + weight;
-
-                        if ((dist.count(newPosition) == 0 || newCost < dist[newPosition]) && (localUpdates.count(newPosition) == 0 || newCost < localUpdates[newPosition].newCost)) {
-                            localUpdates[newPosition] = {newCost, position, bucketIndex(newCost)};
-                        }
-                    }
-                }
-            }
-
-            
-
-            for (auto& localS : allLocalS) {
-                for (const auto& p : localS) {
-                    S.insert(p);
-                }
-            }
-            for (auto& localNextR : allLocalNextR) {
-                nextR.insert(nextR.end(), localNextR.begin(), localNextR.end());
-            }
-
-            for (auto& localUpdates : allLocalUpdates) {
-                for (auto& [newPosition, localUpdate] : localUpdates) {
-                    float newCost = localUpdate.newCost;
-                    Position position = localUpdate.position;
-            
-                    if (dist.count(newPosition) == 0 || newCost < dist[newPosition]) {
+                    if ((dist.count(newPosition) == 0 || newCost < dist[newPosition])) {
                         dist[newPosition] = newCost;
                         prev[newPosition] = position;
-                        if (localUpdate.i == bucketI) {
+    
+                        int nextBucketI = bucketIndex(newCost);
+                        if (nextBucketI == bucketI) {
                             nextR.push_back(newPosition);
                         } else {
-                            buckets[localUpdate.i].push_back(newPosition);
+                            buckets[nextBucketI].push_back(newPosition);
                         }
                     }
                 }
@@ -211,7 +182,9 @@ std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& prob
             nextR.clear();
         }
 
-        for (const Position& position : S) {
+        #pragma omp parallel for
+        for (int i = 0; i < S.size(); i++) {
+            const Position& position = S[i];
             float currCost = dist[position];
 
             for (const Position& movement : movements) {
