@@ -2,8 +2,8 @@ CXX = g++
 CXXFLAGS = -std=c++17 -fopenmp -DTBB_INTERFACE_NEW=1
 LDFLAGS = -ltbb
 
-TARGET = planner.out
-SRC = planner.cpp
+TARGET = combination.out
+SRC = main.cpp
 
 all: $(TARGET)
 

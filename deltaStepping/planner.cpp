@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <random>
 #include <omp.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/concurrent_unordered_set.h>
@@ -125,6 +126,117 @@ struct Update {
     Position position;
     int i;
 };
+
+std::pair<int, int> pickTwoRandom(const std::unordered_set<int>& activeNodes) {
+    if (activeNodes.size() < 2) {
+        throw std::runtime_error("Not enough elements to pick two!");
+    }
+
+    // Move elements into a vector
+    std::vector<int> nodes(activeNodes.begin(), activeNodes.end());
+
+    // Random device and generator
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+
+    std::uniform_int_distribution<> dis(0, nodes.size() - 1);
+
+    int firstIndex = dis(gen);
+    int secondIndex;
+    do {
+        secondIndex = dis(gen);
+    } while (secondIndex == firstIndex);
+
+    return {nodes[firstIndex], nodes[secondIndex]};
+}
+
+
+std::optional<PlanningResult> deltaSteppingStuff(const PlanningProblem& problem, float delta) {
+    Map map = problem.map;
+    Position start = problem.start;
+    Position end = problem.end;
+
+    const int numBuckets = 10000;
+    auto bucketIndex = [&](float dist) -> int {
+        return static_cast<int>(std::floor(dist / delta));
+    };
+
+    std::vector<tbb::concurrent_vector<Position>> buckets(numBuckets);
+    tbb::concurrent_unordered_map<Position, Position, PositionHash> prev;
+    tbb::concurrent_unordered_map<Position, float, PositionHash> dist;
+
+    buckets[0].push_back(start);
+    dist[start] = 0;
+    for (int bucketI = 0; bucketI < numBuckets; bucketI++) {
+
+        tbb::concurrent_vector<Position> S;
+        tbb::concurrent_vector<Position> R = buckets[bucketI];
+        tbb::concurrent_vector<Position> nextR;
+
+        while (R.size() > 0) {
+
+            #pragma omp parallel for schedule(dynamic, 8)
+            for (int i = 0; i < R.size(); i++) {
+                const Position& position = R[i];
+                S.push_back(position);
+
+                float currCost = dist[position];
+                for (const Position& movement : movements) {
+                    const Position newPosition = position + movement;
+                    if (!newPosition.valid(map)) continue;
+    
+                    float weight = map[newPosition.row][newPosition.col] + 1;
+                    if (weight > delta) continue;
+    
+                    float newCost = currCost + weight;
+
+                    if ((dist.count(newPosition) == 0 || newCost < dist[newPosition])) {
+                        dist[newPosition] = newCost;
+                        prev[newPosition] = position;
+    
+                        int nextBucketI = bucketIndex(newCost);
+                        if (nextBucketI == bucketI) {
+                            nextR.push_back(newPosition);
+                        } else {
+                            buckets[nextBucketI].push_back(newPosition);
+                        }
+                    }
+                }
+            }
+            R = nextR;
+            nextR.clear();
+        }
+
+        #pragma omp parallel for schedule(dynamic, 8)
+        for (int i = 0; i < S.size(); i++) {
+            const Position& position = S[i];
+            float currCost = dist[position];
+
+            for (const Position& movement : movements) {
+                Position newPosition = position + movement;
+                if (!newPosition.valid(map)) continue;
+
+                float weight = map[newPosition.row][newPosition.col] + 1;
+                if (weight <= delta) continue;
+
+                float newCost = currCost + weight;
+                if (dist.count(newPosition) == 0 || newCost < dist[newPosition]) {
+                    dist[newPosition] = newCost;
+                    prev[newPosition] = position;
+                    buckets[bucketIndex(newCost)].push_back(newPosition);
+                }
+            }
+        }
+    }
+
+    std::vector<Position> path;
+    for (Position at = end; at != start; at = prev[at]) {
+        path.push_back(at);
+    }
+    path.push_back(start);
+    std::reverse(path.begin(), path.end());
+    return PlanningResult{dist[end], path};
+}
 
 std::optional<PlanningResult> deltaStepping(const PlanningProblem& problem, float delta) {
     Map map = problem.map;
