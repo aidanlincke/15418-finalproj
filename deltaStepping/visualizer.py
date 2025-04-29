@@ -37,7 +37,7 @@ if __name__ == "__main__":
     plt.figure(figsize=(10, 10))
     plt.imshow(map, cmap='gray', origin='upper')
 
-    plt.plot(plan_cols, plan_rows, color='blue', linewidth=1, label="Path")
+    # plt.plot(plan_cols, plan_rows, color='blue', linewidth=1, label="Path")
 
     plt.scatter([start_col], [start_row], color='green', s=50, label="Start")
     plt.scatter([end_col], [end_row], color='red', s=50, label="Goal")
@@ -45,4 +45,5 @@ if __name__ == "__main__":
     plt.legend()
     plt.axis("off")
     plt.tight_layout()
+    plt.savefig("path_plot.png", dpi=300) 
     plt.show()
