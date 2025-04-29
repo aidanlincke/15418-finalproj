@@ -10,6 +10,11 @@
 #include <unordered_map>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <omp.h>
+#include <tbb/concurrent_vector.h>
+#include <tbb/concurrent_unordered_set.h>
+#include <tbb/concurrent_unordered_map.h>
 
 using Map = std::vector<std::vector<float>>;
 struct Position {
@@ -25,7 +30,7 @@ struct Position {
     bool operator !=(const Position& other) const {
         return !(*this == other);
     }
-    bool valid(const Map& map) {
+    bool valid(const Map& map) const {
         int rows = map.size();
         int cols = map[0].size();
         return 0 <= row && row < rows && 0 <= col && col < cols;
@@ -68,7 +73,7 @@ constexpr std::array<Position, 9> movements = {
     Position{-1, 1}
 };
 
-std::optional<PlanningResult> dijkstras(const PlanningProblem& problem) {
+std::optional<PlanningResult> sequentialDijkstras(const PlanningProblem& problem) {
     Map map = problem.map;
     Position start = problem.start;
     Position end = problem.end;
@@ -113,6 +118,99 @@ std::optional<PlanningResult> dijkstras(const PlanningProblem& problem) {
         }
     }
     return std::nullopt;
+}
+
+struct Update {
+    float newCost;
+    Position position;
+    int i;
+};
+
+std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& problem, float delta) {
+    Map map = problem.map;
+    Position start = problem.start;
+    Position end = problem.end;
+
+    const int numBuckets = 10000;
+    auto bucketIndex = [&](float dist) -> int {
+        return static_cast<int>(std::floor(dist / delta));
+    };
+
+    std::vector<tbb::concurrent_vector<Position>> buckets(numBuckets);
+    tbb::concurrent_unordered_map<Position, Position, PositionHash> prev;
+    tbb::concurrent_unordered_map<Position, float, PositionHash> dist;
+
+    buckets[0].push_back(start);
+    dist[start] = 0;
+    for (int bucketI = 0; bucketI < numBuckets; bucketI++) {
+
+        tbb::concurrent_vector<Position> S;
+        tbb::concurrent_vector<Position> R = buckets[bucketI];
+        tbb::concurrent_vector<Position> nextR;
+
+        while (R.size() > 0) {
+
+            #pragma omp parallel for
+            for (int i = 0; i < R.size(); i++) {
+                const Position& position = R[i];
+                S.push_back(position);
+
+                float currCost = dist[position];
+                for (const Position& movement : movements) {
+                    const Position newPosition = position + movement;
+                    if (!newPosition.valid(map)) continue;
+    
+                    float weight = map[newPosition.row][newPosition.col] + 1;
+                    if (weight > delta) continue;
+    
+                    float newCost = currCost + weight;
+
+                    if ((dist.count(newPosition) == 0 || newCost < dist[newPosition])) {
+                        dist[newPosition] = newCost;
+                        prev[newPosition] = position;
+    
+                        int nextBucketI = bucketIndex(newCost);
+                        if (nextBucketI == bucketI) {
+                            nextR.push_back(newPosition);
+                        } else {
+                            buckets[nextBucketI].push_back(newPosition);
+                        }
+                    }
+                }
+            }
+            R = nextR;
+            nextR.clear();
+        }
+
+        #pragma omp parallel for
+        for (int i = 0; i < S.size(); i++) {
+            const Position& position = S[i];
+            float currCost = dist[position];
+
+            for (const Position& movement : movements) {
+                Position newPosition = position + movement;
+                if (!newPosition.valid(map)) continue;
+
+                float weight = map[newPosition.row][newPosition.col] + 1;
+                if (weight <= delta) continue;
+
+                float newCost = currCost + weight;
+                if (dist.count(newPosition) == 0 || newCost < dist[newPosition]) {
+                    dist[newPosition] = newCost;
+                    prev[newPosition] = position;
+                    buckets[bucketIndex(newCost)].push_back(newPosition);
+                }
+            }
+        }
+    }
+
+    std::vector<Position> path;
+    for (Position at = end; at != start; at = prev[at]) {
+        path.push_back(at);
+    }
+    path.push_back(start);
+    std::reverse(path.begin(), path.end());
+    return PlanningResult{dist[end], path};
 }
 
 PlanningProblem loadProblem(const std::string& path) {
@@ -161,10 +259,12 @@ void writePlan(const std::string& filename, const std::vector<Position>& plan) {
 }
 
 int main(int argc, char *argv[]) {
+    omp_set_num_threads(8);
     PlanningProblem problem = loadProblem("problems/dc.bin");
 
     auto start = std::chrono::high_resolution_clock::now();
-    std::optional<PlanningResult> result = dijkstras(problem);
+    // std::optional<PlanningResult> result = sequentialDijkstras(problem);
+    std::optional<PlanningResult> result = deltaSteppingDijkstras(problem, 20.0f);
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end - start;
 
