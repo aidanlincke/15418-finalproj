@@ -126,7 +126,7 @@ struct Update {
     int i;
 };
 
-std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& problem, float delta) {
+std::optional<PlanningResult> deltaStepping(const PlanningProblem& problem, float delta) {
     Map map = problem.map;
     Position start = problem.start;
     Position end = problem.end;
@@ -150,7 +150,7 @@ std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& prob
 
         while (R.size() > 0) {
 
-            #pragma omp parallel for
+            #pragma omp parallel for schedule(dynamic, 8)
             for (int i = 0; i < R.size(); i++) {
                 const Position& position = R[i];
                 S.push_back(position);
@@ -182,7 +182,7 @@ std::optional<PlanningResult> deltaSteppingDijkstras(const PlanningProblem& prob
             nextR.clear();
         }
 
-        #pragma omp parallel for
+        #pragma omp parallel for schedule(dynamic, 8)
         for (int i = 0; i < S.size(); i++) {
             const Position& position = S[i];
             float currCost = dist[position];
@@ -263,8 +263,7 @@ int main(int argc, char *argv[]) {
     PlanningProblem problem = loadProblem("problems/dc.bin");
 
     auto start = std::chrono::high_resolution_clock::now();
-    // std::optional<PlanningResult> result = sequentialDijkstras(problem);
-    std::optional<PlanningResult> result = deltaSteppingDijkstras(problem, 20.0f);
+    std::optional<PlanningResult> result = deltaStepping(problem, 20.0f);
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end - start;
 
