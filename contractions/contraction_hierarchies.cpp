@@ -1,3 +1,5 @@
+// Uses thread-safe maps
+
 #include <vector>
 #include <unordered_map>
 #include <utility>
@@ -10,7 +12,7 @@
 #include <omp.h>
 #include <cassert>
 //#include <immintrin.h>
-//#include <stm.h>
+
 #include <tbb/concurrent_unordered_map.h>
 
 struct Node {
@@ -38,21 +40,21 @@ struct LinkedList {
     }
 
     void append(LinkedList* other) {
-        //for (Node* current = other->start; current != nullptr; current = current->next) {
-        //    push_back(current->value);
-        //}
-
+        for (Node* current = other->start; current != nullptr; current = current->next) {
+            push_back(current->value);
+        }
+        /*
         if (other->start == nullptr) {
             return;
         }
-        
+
         if (start == nullptr) {
             start = other->start;
             end = other->end;
         } else {
             end->next = other->start;
             end = other->end;
-        }
+        }*/
     }
 
     void print() const {
@@ -64,31 +66,22 @@ struct LinkedList {
     }
 };
 
-// A custom structure to represent a weighted edge
 struct Edge {
     float weight;
-
-    // Constructor for convenience
     Edge(float w = 0.0f) : weight(w) {}
 };
 
-// A custom structure to represent a weighted edge with a path (linked list)
 struct ShortcutEdge {
     float weight;
     LinkedList* path;
 
-    // Constructor for convenience
     ShortcutEdge(float w = 0.0f) : weight(w), path(new LinkedList()) {}
+
     ShortcutEdge(float w, LinkedList *p) : weight(w), path(p) {}
 };
 
-// Type 1: Simple Weighted Graph
-// Each vertex is represented by an index, and its neighbors are stored in an unordered_map
-// The unordered_map maps from neighbor vertex (int) to edge weight (float)
 using SimpleGraph = std::vector<std::unordered_map<int, Edge>>;
 
-// Type 2: Contracted Graph
-// Contains both the graph data and a set of active nodes
 struct ContractedGraph {
     std::vector<tbb::concurrent_unordered_map<int, ShortcutEdge>> edges;
     std::unordered_set<int> activeNodes;
@@ -106,7 +99,7 @@ struct ContractedGraph {
             activeNodes.insert(v);
         }
     }
-    
+
     // Constructor with specified size
     explicit ContractedGraph(int size) {
         edges.resize(size);
@@ -116,119 +109,72 @@ struct ContractedGraph {
     }
 };
 
-// Function to load a SimpleGraph from a Pittsburgh graph file
 SimpleGraph loadGraphFromFile(const std::string& filename) {
-    // Open the file
+
     std::ifstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Error: Could not open file " << filename << std::endl;
         return SimpleGraph();
     }
-    
-    // Read the number of nodes and edges
+
     int numNodes, numEdges;
     file >> numNodes >> numEdges;
-    
+
     // Create graph with appropriate size
     SimpleGraph graph(numNodes);
-    
+
     // Read each edge
     int numSelfLoops = 0;
     for (int i = 0; i < numEdges; ++i) {
         int from, to;
         float weight;
-        
+
         file >> from >> to >> weight;
 
         if (from == to) {
             numSelfLoops++;
             continue;
         }
-        
+
         // Add the edge to the graph (both directions for undirected graph)
         graph[from][to] = Edge(weight);
         graph[to][from] = Edge(weight);
-        
+
     }
     numEdges -= numSelfLoops;
-    
+
     std::cout << "Loaded graph with " << numNodes << " nodes and " << numEdges << " edges" << std::endl;
     return graph;
 }
 
-// Helper function to create a simple graph with a specified number of vertices
-SimpleGraph createSimpleGraph(int numVertices) {
-    return SimpleGraph(numVertices);
-}
 
-// Helper function to add an edge to the simple graph
 void addEdge(SimpleGraph& graph, int from, int to, float weight) {
     graph[from][to] = Edge(weight);
     graph[to][from] = Edge(weight);
 }
 
-// Helper function to create a grid graph with rows*cols vertices
-SimpleGraph createGridGraph(int rows, int cols) {
-    int numVertices = rows * cols;
-    SimpleGraph graph = createSimpleGraph(numVertices);
-    
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(1.0f, 10.0f);
-    
-    // Helper function to convert (row, col) to vertex index
-    auto vertexIndex = [cols](int row, int col) {
-        return row * cols + col;
-    };
-    
-    // Add edges for the grid
-    for (int row = 0; row < rows; ++row) {
-        for (int col = 0; col < cols; ++col) {
-            int current = vertexIndex(row, col);
-            
-            // Add edge to right neighbor
-            if (col + 1 < cols) {
-                int right = vertexIndex(row, col + 1);
-                float weight = dist(rng);
-                addEdge(graph, current, right, weight);
-            }
-            
-            // Add edge to bottom neighbor
-            if (row + 1 < rows) {
-                int bottom = vertexIndex(row + 1, col);
-                float weight = dist(rng);
-                addEdge(graph, current, bottom, weight);
-            }
-            
-            // Add some diagonal edges for more interesting shortcuts
-            if (row + 1 < rows && col + 1 < cols && dist(rng) > 7.0f) {
-                int diagonal = vertexIndex(row + 1, col + 1);
-                float weight = dist(rng);
-                addEdge(graph, current, diagonal, weight);
-            }
-        }
-    }
-    
-    return graph;
-}
 
-
-// Helper function to contract a node in the contracted graph
 void contractNode(ContractedGraph& graph, int nodeToContract) {
     std::vector<std::pair<int, ShortcutEdge>> edgeList(
         graph.edges[nodeToContract].begin(),
         graph.edges[nodeToContract].end()
     );
 
+void contractNode(ContractedGraph& graph, int nodeToContract) {
+    std::vector<std::pair<int, ShortcutEdge>> edgeList(
+        graph.edges[nodeToContract].begin(),
+        graph.edges[nodeToContract].end()
+    );
     #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < edgeList.size(); ++i) {
         const auto& [start, edge_in] = edgeList[i];
         //for (const auto& [start, edge_in] : graph.edges[nodeToContract]) {
 
         for (const auto& [end, edge_out] : graph.edges[nodeToContract]) {
-            
+
             if (start < end) {
                 float new_weight = edge_in.weight + edge_out.weight;
-                
+
                 if (graph.edges[start].find(end) == graph.edges[start].end() || graph.edges[start][end].weight > new_weight) {
                     LinkedList *new_path = new LinkedList();
 
@@ -261,12 +207,14 @@ ContractedGraph makeContraction(SimpleGraph& graph) {
     ContractedGraph contractedGraph(graph);
 
     for (int i = 0; i < graph.size(); ++i) {
+      if (i % 4 !=0) {//(contractedGraph.edges[i].size() < 8) {//
+            //std::cout << "Contracting node " << i << std::endl;
         if (i % 11 !=0) {//(contractedGraph.edges[i].size() < 4) {
             std::cout << "Contracting node " << i << std::endl;
             contractNode(contractedGraph, i);
         }
     }
-    
+
     return contractedGraph;
 }
 
@@ -302,7 +250,7 @@ void printContractedGraph(const ContractedGraph& graph) {
     //         std::cout << " (contracted)";
     //     }
     //     std::cout << ":\n";
-        
+
     //     for (const auto& [neighbor, edge] : graph.edges[v]) {
     //         std::cout << "  -> " << neighbor << " (weight: " << edge.weight << ", path: ";
     //         edge.path->print();
@@ -328,9 +276,64 @@ bool verifyGraph(SimpleGraph& graph) {
     return true;
 }
 
+bool verifyContraction(ContractedGraph& contraction, SimpleGraph& graph) {
+    int maxNode = contraction.edges.size();
+    if (maxNode != graph.size()) {
+        std::cout << "Graph size missmatch" << std::endl;
+        return false;
+    }
+
+    for (const auto& node : contraction.activeNodes) {
+        for (const auto& [neighbor, edge] : contraction.edges[node]) {
+            if (neighbor == node || neighbor < 0 || neighbor >= maxNode) {
+                std::cout << "Invalid neighbor" << std::endl;
+                return false;
+            }
+
+            if (contraction.edges[neighbor][node].weight != edge.weight) {
+                std::cout << "Weight missmatch" << std::endl;
+                return false;
+            }
+
+            float weight = 0.0f;
+
+            int currNode = node;
+            int currNeighbor;
+            Node *currBlock;
+
+            for (currBlock = edge.path->start; currBlock != nullptr; currBlock = currBlock->next) {
+                currNeighbor = currBlock->value;
+
+                if (graph[currNode].find(currNeighbor) == graph[currNode].end()) {
+                    std::cout << "Neighbor not found" << std::endl;
+                    return false;
+                }
+
+                weight += graph[currNode][currNeighbor].weight;
+
+                currNode = currNeighbor;
+            }
+
+            currNeighbor = neighbor;
+
+            if (graph[currNode].find(currNeighbor) == graph[currNode].end()) {
+                    std::cout << "Neighbor not found" << std::endl;
+                    return false;
+                }
+
+            weight += graph[currNode][currNeighbor].weight;
+
+            if (abs(edge.weight-weight) > 1) {
+                std::cout << "Weight and path do not match: " << weight << " " << edge.weight << std::endl;
+                return false;
+            }
+        }
+    }
+    return true;
+}
 SimpleGraph simpleGraph1() {
     SimpleGraph simpleGraph = createSimpleGraph(5);
-    
+
     // Add some edges
     addEdge(simpleGraph, 0, 1, 4.5);
     addEdge(simpleGraph, 0, 2, 3.1);
@@ -352,24 +355,26 @@ int main() {
     std::cout << "\n=== Loading Pittsburgh graph ===\n";
     std::string filepath = "../gettingGraph/pittsburgh_graph.txt";
     SimpleGraph pittsburghGraph = loadGraphFromFile(filepath);
-    
+
     //printSimpleGraph(pittsburghGraph);
 
     // Test contraction on Pittsburgh graph
     std::cout << "\nStarting contraction of Pittsburgh graph...\n";
     auto startTime = std::chrono::high_resolution_clock::now();
-    
+
     ContractedGraph contractedPittsburgh = makeContraction(pittsburghGraph);
-    
+
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-    
+
     std::cout << "Contraction complete in " << duration << " ms.\n";
 
     std::cout << "Num remaining nodes: " << contractedPittsburgh.activeNodes.size() << std::endl;
     //printContractedGraph(contractedPittsburgh);
 
-    
-    
+
+    assert(verifyContraction(contractedPittsburgh, pittsburghGraph));
+
+
     return 0;
 }

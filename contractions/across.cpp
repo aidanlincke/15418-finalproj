@@ -1,4 +1,7 @@
-// Uses thread-safe maps
+// Attempt to parallelize graph contraction by taking advantage of
+// across node contraction parallelism. We essentially look for
+// available work / contractions to do which will not interfere with
+// those that are already in flight.
 
 #include <vector>
 #include <unordered_map>
@@ -12,10 +15,6 @@
 #include <omp.h>
 #include <cassert>
 //#include <immintrin.h>
-<<<<<<< HEAD
-=======
-//#include <stm.h>
->>>>>>> c8e0840a451fa2e60340118c58fa3b2f7d800ef5
 #include <tbb/concurrent_unordered_map.h>
 
 struct Node {
@@ -50,7 +49,7 @@ struct LinkedList {
         if (other->start == nullptr) {
             return;
         }
-        
+
         if (start == nullptr) {
             start = other->start;
             end = other->end;
@@ -102,7 +101,7 @@ struct ContractedGraph {
             activeNodes.insert(v);
         }
     }
-    
+
     // Constructor with specified size
     explicit ContractedGraph(int size) {
         edges.resize(size);
@@ -119,33 +118,33 @@ SimpleGraph loadGraphFromFile(const std::string& filename) {
         std::cerr << "Error: Could not open file " << filename << std::endl;
         return SimpleGraph();
     }
-    
+
     int numNodes, numEdges;
     file >> numNodes >> numEdges;
-    
+
     // Create graph with appropriate size
     SimpleGraph graph(numNodes);
-    
+
     // Read each edge
     int numSelfLoops = 0;
     for (int i = 0; i < numEdges; ++i) {
         int from, to;
         float weight;
-        
+
         file >> from >> to >> weight;
 
         if (from == to) {
             numSelfLoops++;
             continue;
         }
-        
+
         // Add the edge to the graph (both directions for undirected graph)
         graph[from][to] = Edge(weight);
         graph[to][from] = Edge(weight);
-        
+
     }
     numEdges -= numSelfLoops;
-    
+
     std::cout << "Loaded graph with " << numNodes << " nodes and " << numEdges << " edges" << std::endl;
     return graph;
 }
@@ -156,33 +155,14 @@ void addEdge(SimpleGraph& graph, int from, int to, float weight) {
     graph[to][from] = Edge(weight);
 }
 
-
 void contractNode(ContractedGraph& graph, int nodeToContract) {
-    std::vector<std::pair<int, ShortcutEdge>> edgeList(
-        graph.edges[nodeToContract].begin(),
-        graph.edges[nodeToContract].end()
-    );
-
-<<<<<<< HEAD
-=======
-// Helper function to contract a node in the contracted graph
-void contractNode(ContractedGraph& graph, int nodeToContract) {
-    std::vector<std::pair<int, ShortcutEdge>> edgeList(
-        graph.edges[nodeToContract].begin(),
-        graph.edges[nodeToContract].end()
-    );
-
->>>>>>> c8e0840a451fa2e60340118c58fa3b2f7d800ef5
-    #pragma omp parallel for schedule(dynamic)
-    for (int i = 0; i < edgeList.size(); ++i) {
-        const auto& [start, edge_in] = edgeList[i];
-        //for (const auto& [start, edge_in] : graph.edges[nodeToContract]) {
+    for (const auto& [start, edge_in] : graph.edges[nodeToContract]) {
 
         for (const auto& [end, edge_out] : graph.edges[nodeToContract]) {
-            
+
             if (start < end) {
                 float new_weight = edge_in.weight + edge_out.weight;
-                
+
                 if (graph.edges[start].find(end) == graph.edges[start].end() || graph.edges[start][end].weight > new_weight) {
                     LinkedList *new_path = new LinkedList();
 
@@ -214,18 +194,79 @@ void contractNode(ContractedGraph& graph, int nodeToContract) {
 ContractedGraph makeContraction(SimpleGraph& graph) {
     ContractedGraph contractedGraph(graph);
 
-    for (int i = 0; i < graph.size(); ++i) {
-<<<<<<< HEAD
-        if (i % 4 !=0) {//(contractedGraph.edges[i].size() < 8) {//
-            //std::cout << "Contracting node " << i << std::endl;
-=======
-        if (i % 11 !=0) {//(contractedGraph.edges[i].size() < 4) {
+    /*for (int i = 0; i < graph.size(); ++i) {
+        if (contractedGraph.edges[i].size() < 8) {
             std::cout << "Contracting node " << i << std::endl;
->>>>>>> c8e0840a451fa2e60340118c58fa3b2f7d800ef5
             contractNode(contractedGraph, i);
         }
     }
-    
+
+    return contractedGraph;*/
+
+    std::unordered_set<int> dontTouch;
+    std::mutex mux;
+
+    for (int k = 0; k < 5; k++) {
+
+        #pragma omp parallel for schedule(dynamic)
+        for (int i = 0; i < graph.size(); ++i) {
+
+            if (contractedGraph.edges[i].size() < 8) {
+                bool doit = true;
+
+                mux.lock();
+                std::unordered_set<int> replacement(dontTouch);
+
+                for (const auto& [neighbor, edge] : contractedGraph.edges[i]) {
+                    if (!replacement.insert(neighbor).second) {
+                        doit = false;
+                        break;
+                    }
+                }
+                if (!replacement.insert(i).second) {
+                    doit = false;
+                }
+
+                if (doit) dontTouch = replacement;
+                mux.unlock();
+
+                if (doit) {
+                    std::cout << "Contracting node " << i << std::endl;
+                    contractNode(contractedGraph, i);
+
+                    mux.lock();
+                    for (const auto& [neighbor, edge] : contractedGraph.edges[i]) {
+                        dontTouch.erase(neighbor);
+                    }
+                    dontTouch.erase(i);
+                    mux.unlock();
+                }
+            }
+        }
+    }
+
+    // for (int k = 0; k < 5; k++) {
+
+    //     #pragma omp parallel for schedule(dynamic)
+    //     for (int i = 0; i < graph.size(); ++i) {
+    //         if (contractedGraph.edges[i].size() < 6 &&
+    //         ((omp_get_thread_num() == 1 && contractedGraph.edges[i].find(proc_zero_working_on) == contractedGraph.edges[i].end()) ||
+    //         (omp_get_thread_num() == 0 && contractedGraph.edges[i].find(proc_one_working_on) == contractedGraph.edges[i].end()))) {
+    //             if (omp_get_thread_num() == 0) proc_zero_working_on = i;
+    //             else proc_one_working_on = i;
+    //             std::cout << "Contracting node " << i << std::endl;
+    //             contractNode(contractedGraph, i);
+    //         }
+    //     }
+    // }
+    /*
+    for (int i = 0; i < graph.size(); ++i) {
+        if (contractedGraph.edges[i].size() < 8) {
+            std::cout << "Contracting node " << i << std::endl;
+            contractNode(contractedGraph, i);
+        }
+    }*/
+
     return contractedGraph;
 }
 
@@ -261,7 +302,7 @@ void printContractedGraph(const ContractedGraph& graph) {
     //         std::cout << " (contracted)";
     //     }
     //     std::cout << ":\n";
-        
+
     //     for (const auto& [neighbor, edge] : graph.edges[v]) {
     //         std::cout << "  -> " << neighbor << " (weight: " << edge.weight << ", path: ";
     //         edge.path->print();
@@ -287,7 +328,6 @@ bool verifyGraph(SimpleGraph& graph) {
     return true;
 }
 
-<<<<<<< HEAD
 bool verifyContraction(ContractedGraph& contraction, SimpleGraph& graph) {
     int maxNode = contraction.edges.size();
     if (maxNode != graph.size()) {
@@ -312,7 +352,7 @@ bool verifyContraction(ContractedGraph& contraction, SimpleGraph& graph) {
             int currNode = node;
             int currNeighbor;
             Node *currBlock;
-            
+
             for (currBlock = edge.path->start; currBlock != nullptr; currBlock = currBlock->next) {
                 currNeighbor = currBlock->value;
 
@@ -344,11 +384,9 @@ bool verifyContraction(ContractedGraph& contraction, SimpleGraph& graph) {
     return true;
 }
 
-=======
->>>>>>> c8e0840a451fa2e60340118c58fa3b2f7d800ef5
 SimpleGraph simpleGraph1() {
     SimpleGraph simpleGraph = createSimpleGraph(5);
-    
+
     // Add some edges
     addEdge(simpleGraph, 0, 1, 4.5);
     addEdge(simpleGraph, 0, 2, 3.1);
@@ -363,35 +401,31 @@ SimpleGraph simpleGraph1() {
 
 // Example usage
 int main() {
-    omp_set_num_threads(8);
+    omp_set_num_threads(2);
     std::cout << "Num threads: " << omp_get_num_threads() << std::endl;
 
     // Test loading Pittsburgh graph
     std::cout << "\n=== Loading Pittsburgh graph ===\n";
     std::string filepath = "../gettingGraph/pittsburgh_graph.txt";
     SimpleGraph pittsburghGraph = loadGraphFromFile(filepath);
-    
+
     //printSimpleGraph(pittsburghGraph);
 
     // Test contraction on Pittsburgh graph
     std::cout << "\nStarting contraction of Pittsburgh graph...\n";
     auto startTime = std::chrono::high_resolution_clock::now();
-    
+
     ContractedGraph contractedPittsburgh = makeContraction(pittsburghGraph);
-    
+
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-    
+
     std::cout << "Contraction complete in " << duration << " ms.\n";
 
     std::cout << "Num remaining nodes: " << contractedPittsburgh.activeNodes.size() << std::endl;
     //printContractedGraph(contractedPittsburgh);
 
-<<<<<<< HEAD
     assert(verifyContraction(contractedPittsburgh, pittsburghGraph));
-=======
-    
->>>>>>> c8e0840a451fa2e60340118c58fa3b2f7d800ef5
-    
+
     return 0;
 }

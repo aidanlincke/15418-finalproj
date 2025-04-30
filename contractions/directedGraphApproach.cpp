@@ -48,7 +48,7 @@ struct LinkedList {
         if (other->start == nullptr) {
             return;
         }
-        
+
         if (start == nullptr) {
             start = other->start;
             end = other->end;
@@ -100,7 +100,7 @@ struct ContractedGraph {
             activeNodes.insert(v);
         }
     }
-    
+
     // Constructor with specified size
     explicit ContractedGraph(int size) {
         edges.resize(size);
@@ -117,33 +117,33 @@ SimpleGraph loadGraphFromFile(const std::string& filename) {
         std::cerr << "Error: Could not open file " << filename << std::endl;
         return SimpleGraph();
     }
-    
+
     int numNodes, numEdges;
     file >> numNodes >> numEdges;
-    
+
     // Create graph with appropriate size
     SimpleGraph graph(numNodes);
-    
+
     // Read each edge
     int numSelfLoops = 0;
     for (int i = 0; i < numEdges; ++i) {
         int from, to;
         float weight;
-        
+
         file >> from >> to >> weight;
 
         if (from == to) {
             numSelfLoops++;
             continue;
         }
-        
+
         // Add the edge to the graph (both directions for undirected graph)
         graph[from][to] = Edge(weight);
         graph[to][from] = Edge(weight);
-        
+
     }
     numEdges -= numSelfLoops;
-    
+
     std::cout << "Loaded graph with " << numNodes << " nodes and " << numEdges << " edges" << std::endl;
     return graph;
 }
@@ -167,10 +167,10 @@ void contractNode(ContractedGraph& graph, int nodeToContract) {
         //for (const auto& [start, edge_in] : graph.edges[nodeToContract]) {
 
         for (const auto& [end, edge_out] : graph.edges[nodeToContract]) {
-            
+
             if (start != end) {
                 float new_weight = edge_in.weight + edge_out.weight;
-                
+
                 if (graph.edges[start].find(end) == graph.edges[start].end() || graph.edges[start][end].weight > new_weight) {
                     LinkedList *new_path = new LinkedList();
 
@@ -222,7 +222,7 @@ ContractedGraph makeContraction(SimpleGraph& graph) {
             contractNode(contractedGraph, i);
         }
     }
-    
+
     return contractedGraph;
 }
 
@@ -258,7 +258,7 @@ void printContractedGraph(const ContractedGraph& graph) {
     //         std::cout << " (contracted)";
     //     }
     //     std::cout << ":\n";
-        
+
     //     for (const auto& [neighbor, edge] : graph.edges[v]) {
     //         std::cout << "  -> " << neighbor << " (weight: " << edge.weight << ", path: ";
     //         edge.path->print();
@@ -286,7 +286,7 @@ bool verifyGraph(SimpleGraph& graph) {
 
 SimpleGraph simpleGraph1() {
     SimpleGraph simpleGraph = createSimpleGraph(5);
-    
+
     // Add some edges
     addEdge(simpleGraph, 0, 1, 4.5);
     addEdge(simpleGraph, 0, 2, 3.1);
@@ -323,7 +323,7 @@ bool verifyContraction(ContractedGraph& contraction, SimpleGraph& graph) {
             int currNode = node;
             int currNeighbor;
             Node *currBlock;
-            
+
             for (currBlock = edge.path->start; currBlock != nullptr; currBlock = currBlock->next) {
                 currNeighbor = currBlock->value;
 
@@ -361,39 +361,39 @@ int main() {
     std::cout << "Num threads: " << omp_get_num_threads() << std::endl;
 
     // SimpleGraph gridGraph = createGridGraph(10, 10);
-    
+
     // printSimpleGraph(gridGraph);
-    
+
     // ContractedGraph gridContraction = makeContraction(gridGraph);
 
     // printContractedGraph(gridContraction);
 
     // assert(verifyContraction(gridContraction, gridGraph));
 
-    
+
 
     // Test loading Pittsburgh graph
     std::cout << "\n=== Loading Pittsburgh graph ===\n";
     std::string filepath = "../gettingGraph/pittsburgh_graph.txt";
     SimpleGraph pittsburghGraph = loadGraphFromFile(filepath);
-    
+
     //printSimpleGraph(pittsburghGraph);
 
     // Test contraction on Pittsburgh graph
     std::cout << "\nStarting contraction of Pittsburgh graph...\n";
     auto startTime = std::chrono::high_resolution_clock::now();
-    
+
     ContractedGraph contractedPittsburgh = makeContraction(pittsburghGraph);
-    
+
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-    
+
     std::cout << "Contraction complete in " << duration << " ms.\n";
 
     std::cout << "Num remaining nodes: " << contractedPittsburgh.activeNodes.size() << std::endl;
     //printContractedGraph(contractedPittsburgh);
 
     assert(verifyContraction(contractedPittsburgh, pittsburghGraph));
-    
+
     return 0;
 }
